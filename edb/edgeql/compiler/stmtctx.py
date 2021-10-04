@@ -111,6 +111,11 @@ def fini_expression(
     ctx: context.ContextLevel,
 ) -> irast.Command:
 
+    # and wait, what about doing this inside shapes...
+    # new = irast.ScopeTreeNode()
+    # new.attach_child(ctx.path_scope)
+    ir = viewgen.eta_expand_ir(ir, toplevel=True, ctx=ctx)
+
     if (
         isinstance(ir, irast.Set)
         and pathctx.get_set_scope(ir, ctx=ctx) is None

@@ -166,11 +166,10 @@ def compile_ForQuery(
         stmt.iterator_stmt = iterator_stmt
 
         iterator_type = setgen.get_set_type(iterator_stmt, ctx=ctx)
-        anytype = iterator_type.find_any(ctx.env.schema)
-        if anytype is not None:
+        if iterator_type.is_any(ctx.env.schema):
             raise errors.QueryError(
                 'FOR statement has iterator of indeterminate type',
-                context=ctx.env.type_origins.get(anytype),
+                context=ctx.env.type_origins.get(iterator_type),
             )
 
         view_scope_info = sctx.path_scope_map[iterator_view]
@@ -1057,6 +1056,10 @@ def compile_result_clause(
 
         ctx.partial_path_prefix = expr
 
+        # XXX: this isn't right, but we can test some of our tests
+        # if ctx.stmt is ctx.toplevel_stmt:
+        #     expr = viewgen.eta_expand_ir(expr, ctx=ctx)
+
         ir_result = compile_query_subject(
             expr, shape=shape, view_rptr=view_rptr, view_name=view_name,
             forward_rptr=forward_rptr,
@@ -1194,6 +1197,7 @@ def compile_query_subject(
         expr = setgen.ensure_set(expr, type_override=view_scls, ctx=ctx)
         expr_stype = view_scls
 
+    # XXX: should we avoid this if we are going to eta expand??
     if compile_views:
         rptr = view_rptr.rptr if view_rptr is not None else None
         viewgen.late_compile_view_shapes(expr, rptr=rptr, ctx=ctx)

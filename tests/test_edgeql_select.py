@@ -6405,3 +6405,130 @@ class TestEdgeQLSelect(tb.QueryTestCase):
             ''',
             [{"name": "Elvis"}],
         )
+
+    async def test_edgeql_collection_shape_01(self):
+        await self.assert_query_result(
+            r'''
+                SELECT <array<User>>{} UNION [User]
+            ''',
+            [[{"id": {}}], [{"id": {}}]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT <array<User>>{} ?? [User]
+            ''',
+            [[{"id": {}}], [{"id": {}}]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT <array<User>>{} IF false ELSE [User]
+            ''',
+            [[{"id": {}}], [{"id": {}}]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT assert_exists([User])
+            ''',
+            [[{"id": {}}], [{"id": {}}]],
+        )
+
+    async def test_edgeql_collection_shape_02(self):
+        await self.assert_query_result(
+            r'''
+                SELECT <array<User>>{} UNION array_agg(User)
+            ''',
+            [[{"id": {}}, {"id": {}}]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT <array<User>>{} ?? array_agg(User)
+            ''',
+            [[{"id": {}}, {"id": {}}]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT <array<User>>{} IF false ELSE array_agg(User)
+            ''',
+            [[{"id": {}}, {"id": {}}]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT assert_exists(array_agg(User))
+            ''',
+            [[{"id": {}}, {"id": {}}]],
+        )
+
+    async def test_edgeql_collection_shape_03(self):
+        await self.assert_query_result(
+            r'''
+                SELECT <tuple<User, int64>>{} UNION (User, 2)
+            ''',
+            [[{"id": {}}, 2], [{"id": {}}, 2]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT <tuple<User, int64>>{} ?? (User, 2)
+            ''',
+            [[{"id": {}}, 2], [{"id": {}}, 2]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT <tuple<User, int64>>{} IF false ELSE (User, 2)
+            ''',
+            [[{"id": {}}, 2], [{"id": {}}, 2]],
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT assert_exists((User, 2))
+            ''',
+            [[{"id": {}}, 2], [{"id": {}}, 2]],
+        )
+
+    async def test_edgeql_collection_shape_04(self):
+        await self.assert_query_result(
+            r'''
+                SELECT [(User,)][0]
+            ''',
+            [[{"id": {}}], [{"id": {}}]]
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT [((SELECT User {name} ORDER BY .name),)][0]
+            ''',
+            [[{"name": "Elvis"}], [{"name": "Yury"}]]
+        )
+
+    async def test_edgeql_collection_shape_05(self):
+        await self.assert_query_result(
+            r'''
+                SELECT ([User],).0
+            ''',
+            [[{"id": {}}], [{"id": {}}]]
+        )
+
+        await self.assert_query_result(
+            r'''
+                SELECT ([(SELECT User {name} ORDER BY .name)],).0
+            ''',
+            [[{"name": "Elvis"}], [{"name": "Yury"}]]
+        )
+
+    async def test_edgeql_collection_shape_06(self):
+        await self.assert_query_result(
+            r'''
+                SELECT { z := ([User],).0 }
+            ''',
+            [
+                {"z": [[{"id": {}}], [{"id": {}}]]}
+            ]
+        )

@@ -455,6 +455,10 @@ def _compile_qlexpr(
 
         irexpr = dispatch.compile(qlexpr, ctx=shape_expr_ctx)
 
+    # ????
+    if ctx.expr_exposed:
+        irexpr = eta_expand_ir(irexpr, ctx=ctx)
+
     return irexpr, shape_expr_ctx.view_rptr
 
 
@@ -1569,3 +1573,276 @@ def _late_compile_view_shapes_in_array(
         ctx: context.ContextLevel) -> None:
     for element in expr.elements:
         late_compile_view_shapes(element, ctx=ctx)
+
+
+def needs_eta_expansion_expr(
+    ir: irast.Expr,
+    stype: s_types.Type,
+    *,
+    ctx: context.ContextLevel,
+) -> bool:
+    # TODO: also only if there is an object type
+    # OK, but let us keep it on until it is less broken.
+    return True
+
+    if isinstance(ir, irast.SelectStmt):
+        return needs_eta_expansion(ir.result, ctx=ctx)
+
+    if isinstance(stype, s_types.Array):
+        if isinstance(ir, irast.Array):
+            return (
+                len(ir.elements) != 1
+                or needs_eta_expansion(ir.elements[0], ctx=ctx)
+            )
+        elif (
+            isinstance(ir, irast.FunctionCall)
+            and ir.func_shortname == sn.QualName('std', 'array_agg')
+        ):
+            return needs_eta_expansion(ir.args[0].expr, ctx=ctx)
+        else:
+            return True
+
+    elif isinstance(stype, s_types.Tuple):
+        if isinstance(ir, irast.Tuple):
+            return any(
+                needs_eta_expansion(el.val, ctx=ctx) for el in ir.elements
+            )
+        else:
+            return True
+
+    else:
+        return False
+
+
+def needs_eta_expansion(
+    ir: irast.Set,
+    *,
+    ctx: context.ContextLevel,
+) -> bool:
+    stype = setgen.get_set_type(ir, ctx=ctx)
+
+    if not isinstance(stype, (s_types.Array, s_types.Tuple)):
+        return False
+
+    if not ir.expr:
+        return True
+
+    return needs_eta_expansion_expr(ir.expr, stype, ctx=ctx)
+
+
+def eta_expand_ir(
+    ir: irast.Set,
+    *,
+    toplevel: bool=False,
+    ctx: context.ContextLevel,
+) -> irast.Set:
+    if (
+        ctx.env.options.schema_object_context
+        or ctx.env.options.func_params
+        or ctx.env.options.schema_view_mode
+    ):
+        return ir
+
+    if not needs_eta_expansion(ir, ctx=ctx):
+        return ir
+
+    with ctx.new() as subctx:
+        # subctx.expr_exposed = False
+
+        # This is the dodgiest part of all this, but shunt the current
+        # path scope into a sibling
+        # parent = subctx.path_scope.parent
+        # assert parent
+        # fence = parent.attach_fence()
+        # fence.attach_child(subctx.path_scope)
+        # subctx.path_scope = fence
+
+        subctx.anchors = subctx.anchors.copy()
+        source_ref = subctx.create_anchor(ir)
+
+        alias = subctx.aliases.get('eta')
+        path = qlast.Path(
+            steps=[qlast.ObjectRef(name=alias)],
+        )
+        qry = qlast.SelectQuery(
+            result=eta_expand(
+                path, setgen.get_set_type(ir, ctx=ctx), ctx=ctx
+            ),
+            aliases=[
+                qlast.AliasedExpr(alias=alias, expr=source_ref)
+            ],
+        )
+        if toplevel:
+            subctx.toplevel_stmt = None
+            # subctx.expr_exposed = True  # ?
+        return dispatch.compile(qry, ctx=subctx)
+
+
+def eta_expand(
+    expr: qlast.Expr,
+    stype: s_types.Type,
+    *,
+    ctx: context.ContextLevel,
+) -> qlast.Expr:
+    if isinstance(stype, s_types.Array):
+        return eta_expand_array(expr, stype, ctx=ctx)
+
+    elif isinstance(stype, s_types.Tuple):
+        return eta_expand_tuple(expr, stype, ctx=ctx)
+
+    else:
+        return expr
+
+
+def eta_expand_tuple(
+    expr: qlast.Expr,
+    stype: s_types.Tuple,
+    *,
+    ctx: context.ContextLevel,
+) -> qlast.Expr:
+    subtypes = list(stype.iter_subtypes(ctx.env.schema))
+    if not subtypes:
+        return expr
+
+    enumerated = qlast.FunctionCall(
+        func=('__std__', 'enumerate'),
+        args=[expr],
+    )
+
+    enumerated_alias = ctx.aliases.get('enum')
+    enumerated_path = qlast.Path(
+        steps=[qlast.ObjectRef(name=enumerated_alias)],
+    )
+
+    element_ast = qlast.Path(
+        steps=[
+            enumerated_path,
+            qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
+        ],
+    )
+
+    els = [
+        (
+            qlast.ObjectRef(name=name),
+            eta_expand(
+                qlast.Path(
+                    steps=[
+                        element_ast, qlast.Ptr(ptr=qlast.ObjectRef(name=name)),
+                    ],
+                ),
+                subtype,
+                ctx=ctx,
+            ),
+        )
+        for name, subtype in subtypes
+    ]
+
+    tup: qlast.Expr
+    if stype.is_named(ctx.env.schema):
+        tup = qlast.NamedTuple(
+            elements=[
+                qlast.TupleElement(name=name, val=el) for name, el in els
+            ])
+    else:
+        tup = qlast.Tuple(
+            elements=[el for _, el in els]
+        )
+
+    return qlast.SelectQuery(
+        result=tup,
+        orderby=[
+            qlast.SortExpr(
+                path=qlast.Path(
+                    steps=[
+                        enumerated_path,
+                        qlast.Ptr(
+                            ptr=qlast.ObjectRef(
+                                name='0',
+                            ),
+                        ),
+                    ],
+                ),
+                direction=qlast.SortOrder.Asc,
+            ),
+        ],
+        aliases=[
+            qlast.AliasedExpr(alias=enumerated_alias, expr=enumerated)
+        ],
+    )
+
+def eta_expand_array(
+    expr: qlast.Expr,
+    stype: s_types.Array,
+    *,
+    ctx: context.ContextLevel,
+) -> qlast.Expr:
+    # We expand arrays roughly into:
+    # WITH Z := $expr
+    # SELECT (
+    #     FOR z in {Z} UNION (
+    #         WITH v := enumerate(array_unpack(z)),
+    #             SELECT array_agg((SELECT EXPAND(v.1) ORDER BY v.0))
+    #     )
+    # );
+
+    expr_alias = ctx.aliases.get('array')
+    expr_path = qlast.Path(
+        steps=[qlast.ObjectRef(name=expr_alias)],
+    )
+
+    unpacked = qlast.FunctionCall(
+        func=('__std__', 'array_unpack'),
+        args=[expr_path],
+    )
+
+    enumerated = qlast.FunctionCall(
+        func=('__std__', 'enumerate'),
+        args=[unpacked],
+    )
+
+    enumerated_alias = ctx.aliases.get('enum')
+    enumerated_path = qlast.Path(
+        steps=[qlast.ObjectRef(name=enumerated_alias)],
+    )
+
+    element_ast = qlast.Path(
+        steps=[
+            enumerated_path,
+            qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
+        ],
+    )
+    expanded_ast = eta_expand(
+        element_ast, stype.get_element_type(ctx.env.schema), ctx=ctx)
+
+    agg_expr = qlast.FunctionCall(
+        func=('__std__', 'array_agg'),
+        args=[
+            qlast.SelectQuery(
+                result=expanded_ast,
+                orderby=[
+                    qlast.SortExpr(
+                        path=qlast.Path(
+                            steps=[
+                                enumerated_path,
+                                qlast.Ptr(
+                                    ptr=qlast.ObjectRef(
+                                        name='0',
+                                    ),
+                                ),
+                            ],
+                        ),
+                        direction=qlast.SortOrder.Asc,
+                    ),
+                ],
+                aliases=[
+                    qlast.AliasedExpr(alias=enumerated_alias, expr=enumerated)
+                ],
+            ),
+        ],
+    )
+
+    return qlast.ForQuery(
+        iterator_alias=expr_alias,
+        iterator=expr,
+        result=agg_expr,
+    )
