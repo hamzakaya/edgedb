@@ -3121,3 +3121,38 @@ class TestEdgeQLScope(tb.QueryTestCase):
                 [{"z": None}, "n/a"]
             ]
         )
+
+    async def test_edgeql_scope_tuple_correlate_03(self):
+        await self.assert_query_result(
+            """
+                WITH X := (User, User.friends)
+                SELECT count(X.0.friends.name ++ X.1.name);
+            """,
+            [10]
+        )
+
+    async def test_edgeql_scope_tuple_correlate_04(self):
+        # XXX: comment
+        await self.assert_query_result(
+            """
+                WITH X := (User { friends }, User.friends)
+                SELECT count(X.0.friends.name ++ X.1.name);
+            """,
+            [4]
+        )
+
+    async def test_edgeql_scope_tuple_correlate_05(self):
+        await self.assert_query_result(
+            """
+                WITH X := (User {friends}, User.friends.name ?? 'n/a')
+                SELECT _ := (X.0 {friends: {name}}, X.1) ORDER BY _.1;
+            """,
+            [
+                [{"friends": [{"name": "Bob"}]}, "Bob"],
+                [{"friends": [{"name": "Bob"}]}, "Bob"],
+                [{"friends": [{"name": "Carol"}]}, "Carol"],
+                [{"friends": [{"name": "Dave"}]}, "Dave"],
+                [{"friends": []}, "n/a"],
+                [{"friends": []}, "n/a"],
+            ]
+        )
