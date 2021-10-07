@@ -501,7 +501,7 @@ def declare_view(
     factoring_fence: bool=False,
     fully_detached: bool=False,
     must_be_used: bool=False,
-    is_for_view: bool=False,
+    binding_kind: irast.BindingKind,
     path_id_namespace: Optional[FrozenSet[str]]=None,
     ctx: context.ContextLevel,
 ) -> irast.Set:
@@ -554,7 +554,7 @@ def declare_view(
         ctx.path_scope_map[view_set] = context.ScopeInfo(
             path_scope=subctx.path_scope,
             pinned_path_id_ns=pinned_pid_ns,
-            is_for_view=is_for_view,
+            binding_kind=binding_kind,
         )
 
         if not fully_detached:
@@ -590,6 +590,7 @@ def declare_view_from_schema(
         viewcls_name = viewcls.get_name(ctx.env.schema)
         assert isinstance(view_ql, qlast.Expr), 'expected qlast.Expr'
         view_set = declare_view(view_ql, alias=viewcls_name,
+                                binding_kind=irast.BindingKind.With,
                                 fully_detached=True, ctx=subctx)
         # The view path id _itself_ should not be in the nested namespace.
         view_set.path_id = view_set.path_id.replace_namespace(

@@ -157,7 +157,7 @@ def compile_ForQuery(
             s_name.UnqualName(qlstmt.iterator_alias),
             factoring_fence=contains_dml,
             path_id_namespace=sctx.path_id_namespace,
-            is_for_view=True,
+            binding_kind=irast.BindingKind.For,
             ctx=sctx,
         )
 
@@ -955,6 +955,7 @@ def process_with_block(
                 binding = stmtctx.declare_view(
                     with_entry.expr,
                     s_name.UnqualName(with_entry.alias),
+                    binding_kind=irast.BindingKind.With,
                     must_be_used=True,
                     ctx=scopectx,
                 )
@@ -1024,6 +1025,7 @@ def compile_result_clause(
             stmtctx.declare_view(
                 rexpr,
                 alias=s_name.UnqualName(result_alias),
+                binding_kind=irast.BindingKind.Select,
                 ctx=sctx,
             )
 

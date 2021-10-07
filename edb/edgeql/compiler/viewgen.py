@@ -1631,7 +1631,9 @@ def needs_eta_expansion(
     if not stype.contains_object(ctx.env.schema):
         return False
 
-    if not ir.expr:
+    if not ir.expr or (
+        ir.is_binding and ir.is_binding != irast.BindingKind.Select
+    ):
         return True
 
     return needs_eta_expansion_expr(ir.expr, stype, ctx=ctx)

@@ -1736,8 +1736,11 @@ def process_set_as_tuple(
     # wrong one to be output. (See test_edgeql_scope_shape_03 for an example
     # where this can come up.)
     # (We only do it for objects as an optimization.)
-    # if any(irtyputils.is_object(x) for x in ir_set.typeref.subtypes):
-    #     pathctx.get_path_serialized_output(stmt, ir_set.path_id, env=ctx.env)
+    if (
+        output.in_serialization_ctx(ctx)
+        and any(irtyputils.is_object(x) for x in ir_set.typeref.subtypes)
+    ):
+        pathctx.get_path_serialized_output(stmt, ir_set.path_id, env=ctx.env)
 
     return new_stmt_set_rvar(
         ir_set, stmt, aspects=['value', 'source'], ctx=ctx)
