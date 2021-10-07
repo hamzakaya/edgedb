@@ -326,6 +326,9 @@ def _process_view(
             _, _, srcctx = ctx.env.pointer_specified_info[ptrcls]
 
         if ptr_set:
+            # if ctx.expr_exposed:
+            #     ptr_set = eta_expand_ir(ptr_set, ctx=ctx)
+
             src_path_id = path_id
             if ptrcls.is_link_property(ctx.env.schema):
                 src_path_id = src_path_id.ptr_path()
@@ -1583,7 +1586,7 @@ def needs_eta_expansion_expr(
 ) -> bool:
     # TODO: also only if there is an object type
     # OK, but let us keep it on until it is less broken.
-    return True
+    # return True
 
     if isinstance(ir, irast.SelectStmt):
         return needs_eta_expansion(ir.result, ctx=ctx)
@@ -1622,6 +1625,10 @@ def needs_eta_expansion(
     stype = setgen.get_set_type(ir, ctx=ctx)
 
     if not isinstance(stype, (s_types.Array, s_types.Tuple)):
+        return False
+
+    # XXX
+    if not stype.contains_object(ctx.env.schema):
         return False
 
     if not ir.expr:
@@ -1700,6 +1707,9 @@ def eta_expand_tuple(
     *,
     ctx: context.ContextLevel,
 ) -> qlast.Expr:
+    # if not stype.contains_object(ctx.env.schema):
+    #     return False
+
     subtypes = list(stype.iter_subtypes(ctx.env.schema))
     if not subtypes:
         return expr
@@ -1770,12 +1780,59 @@ def eta_expand_tuple(
         ],
     )
 
+
+def bad_eta_expand_tuple(
+    expr: qlast.Expr,
+    stype: s_types.Tuple,
+    *,
+    ctx: context.ContextLevel,
+) -> qlast.Expr:
+    # if not stype.contains_object(ctx.env.schema):
+    #     return False
+
+    subtypes = list(stype.iter_subtypes(ctx.env.schema))
+    if not subtypes:
+        return expr
+
+    els = [
+        (
+            qlast.ObjectRef(name=name),
+            eta_expand(
+                qlast.Path(
+                    steps=[
+                        expr, qlast.Ptr(ptr=qlast.ObjectRef(name=name)),
+                    ],
+                ),
+                subtype,
+                ctx=ctx,
+            ),
+        )
+        for name, subtype in subtypes
+    ]
+
+    tup: qlast.Expr
+    if stype.is_named(ctx.env.schema):
+        tup = qlast.NamedTuple(
+            elements=[
+                qlast.TupleElement(name=name, val=el) for name, el in els
+            ])
+    else:
+        tup = qlast.Tuple(
+            elements=[el for _, el in els]
+        )
+
+    return tup
+
+
 def eta_expand_array(
     expr: qlast.Expr,
     stype: s_types.Array,
     *,
     ctx: context.ContextLevel,
 ) -> qlast.Expr:
+    # if not stype.contains_object(ctx.env.schema):
+    #     return False
+
     # We expand arrays roughly into:
     # WITH Z := $expr
     # SELECT (

@@ -1107,6 +1107,7 @@ def __infer_select_stmt(
             new_scope = inf_utils.get_set_scope(part, scope_tree, ctx=ctx)
             card = infer_cardinality(part, scope_tree=new_scope, ctx=ctx)
             if card.is_multi():
+                # breakpoint()
                 raise errors.QueryError(
                     'possibly more than one element returned by an expression '
                     'where only singletons are allowed',

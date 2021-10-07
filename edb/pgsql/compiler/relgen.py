@@ -718,8 +718,14 @@ def process_set_as_link_property_ref(
         else:
             link_prefix = ir_source
 
-        source_scope_stmt = relctx.get_scope_stmt(
+        # source_scope_stmt = relctx.get_scope_stmt(
+        #     ir_source.path_id, ctx=newctx)
+        source_scope_stmt = relctx.maybe_get_scope_stmt(
             ir_source.path_id, ctx=newctx)
+        # XXX???
+        assert source_scope_stmt
+        if source_scope_stmt is None:
+            source_scope_stmt = stmt
 
         link_rvar = pathctx.maybe_get_path_rvar(
             source_scope_stmt, link_path_id, aspect='source', env=ctx.env)
