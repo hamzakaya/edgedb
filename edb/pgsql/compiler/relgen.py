@@ -208,8 +208,8 @@ def get_set_rvar(
         # because we don't know at this point whether it will be
         # reused in an exposed context.
         # (We could avoid this with some more analysis, probably.)
-        if ir_set.is_binding:
-            subctx.expr_exposed = None
+        # if ir_set.is_binding:
+        #     subctx.expr_exposed = None
 
         rvars = _get_set_rvar(ir_set, ctx=subctx)
 
