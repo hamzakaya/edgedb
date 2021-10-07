@@ -27,4 +27,7 @@ from edb.pgsql import common
 class AliasGenerator(compiler.AliasGenerator):
     def get(self, hint: str = '') -> str:
         alias = super().get(hint)
-        return common.edgedb_name_to_pg_name(alias)
+        z = common.edgedb_name_to_pg_name(alias)
+        # if z == 'tuple_serialized~1':
+        #     breakpoint()
+        return z
