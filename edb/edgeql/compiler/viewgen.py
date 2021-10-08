@@ -1676,7 +1676,7 @@ def eta_expand_ir(
         qry = qlast.SelectQuery(
             result=eta_expand(
                 path, setgen.get_set_type(ir, ctx=ctx), ctx=ctx
-            ),
+            )[0],
             aliases=[
                 qlast.AliasedExpr(alias=alias, expr=source_ref)
             ],
@@ -1692,7 +1692,7 @@ def eta_expand(
     stype: s_types.Type,
     *,
     ctx: context.ContextLevel,
-) -> qlast.Expr:
+) -> Tuple[qlast.Expr, bool]:
     if isinstance(stype, s_types.Array):
         return eta_expand_array(expr, stype, ctx=ctx)
 
@@ -1700,7 +1700,7 @@ def eta_expand(
         return eta_expand_tuple(expr, stype, ctx=ctx)
 
     else:
-        return expr
+        return expr, False
 
 
 def eta_expand_tuple(
@@ -1708,13 +1708,13 @@ def eta_expand_tuple(
     stype: s_types.Tuple,
     *,
     ctx: context.ContextLevel,
-) -> qlast.Expr:
+) -> Tuple[qlast.Expr, bool]:
     # if not stype.contains_object(ctx.env.schema):
     #     return False
 
     subtypes = list(stype.iter_subtypes(ctx.env.schema))
     if not subtypes:
-        return expr
+        return expr, False
 
     enumerated = qlast.FunctionCall(
         func=('__std__', 'enumerate'),
@@ -1744,7 +1744,7 @@ def eta_expand_tuple(
                 ),
                 subtype,
                 ctx=ctx,
-            ),
+            ),  # XXX
         )
         for name, subtype in subtypes
     ]
@@ -1753,34 +1753,42 @@ def eta_expand_tuple(
     if stype.is_named(ctx.env.schema):
         tup = qlast.NamedTuple(
             elements=[
-                qlast.TupleElement(name=name, val=el) for name, el in els
+                qlast.TupleElement(name=name, val=el) for name, (el, _) in els
             ])
     else:
         tup = qlast.Tuple(
-            elements=[el for _, el in els]
+            elements=[el for _, (el, _) in els]
+        )
+
+    index_expr = qlast.Path(
+        steps=[
+            enumerated_path,
+            qlast.Ptr(ptr=qlast.ObjectRef(name='0')),
+        ]
+    )
+
+    # This gets hinky because we need to make everything correlate
+    has_nested_work = any(nested for _, (_, nested) in els)
+    if has_nested_work:
+        tup = qlast.Path(
+            steps=[
+                qlast.Tuple(elements=[index_expr, tup]),
+                qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
+            ],
         )
 
     return qlast.SelectQuery(
         result=tup,
         orderby=[
             qlast.SortExpr(
-                path=qlast.Path(
-                    steps=[
-                        enumerated_path,
-                        qlast.Ptr(
-                            ptr=qlast.ObjectRef(
-                                name='0',
-                            ),
-                        ),
-                    ],
-                ),
+                path=index_expr,
                 direction=qlast.SortOrder.Asc,
             ),
         ],
         aliases=[
             qlast.AliasedExpr(alias=enumerated_alias, expr=enumerated)
         ],
-    )
+    ), True
 
 
 def bad_eta_expand_tuple(
@@ -1788,13 +1796,13 @@ def bad_eta_expand_tuple(
     stype: s_types.Tuple,
     *,
     ctx: context.ContextLevel,
-) -> qlast.Expr:
+) -> Tuple[qlast.Expr, bool]:
     # if not stype.contains_object(ctx.env.schema):
     #     return False
 
     subtypes = list(stype.iter_subtypes(ctx.env.schema))
     if not subtypes:
-        return expr
+        return expr, False
 
     els = [
         (
@@ -1807,7 +1815,7 @@ def bad_eta_expand_tuple(
                 ),
                 subtype,
                 ctx=ctx,
-            ),
+            )[0],  # XXX
         )
         for name, subtype in subtypes
     ]
@@ -1823,7 +1831,7 @@ def bad_eta_expand_tuple(
             elements=[el for _, el in els]
         )
 
-    return tup
+    return tup, True
 
 
 def eta_expand_array(
@@ -1831,7 +1839,7 @@ def eta_expand_array(
     stype: s_types.Array,
     *,
     ctx: context.ContextLevel,
-) -> qlast.Expr:
+) -> Tuple[qlast.Expr, bool]:
     # if not stype.contains_object(ctx.env.schema):
     #     return False
 
@@ -1870,8 +1878,23 @@ def eta_expand_array(
             qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
         ],
     )
-    expanded_ast = eta_expand(
+    expanded_ast, has_nested_work = eta_expand(
         element_ast, stype.get_element_type(ctx.env.schema), ctx=ctx)
+
+    index_expr = qlast.Path(
+        steps=[
+            enumerated_path,
+            qlast.Ptr(ptr=qlast.ObjectRef(name='0'))
+        ],
+    )
+
+    if has_nested_work:
+        expanded_ast = qlast.Path(
+            steps=[
+                qlast.Tuple(elements=[index_expr, expanded_ast]),
+                qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
+            ],
+        )
 
     agg_expr = qlast.FunctionCall(
         func=('__std__', 'array_agg'),
@@ -1880,16 +1903,7 @@ def eta_expand_array(
                 result=expanded_ast,
                 orderby=[
                     qlast.SortExpr(
-                        path=qlast.Path(
-                            steps=[
-                                enumerated_path,
-                                qlast.Ptr(
-                                    ptr=qlast.ObjectRef(
-                                        name='0',
-                                    ),
-                                ),
-                            ],
-                        ),
+                        path=index_expr,
                         direction=qlast.SortOrder.Asc,
                     ),
                 ],
@@ -1904,4 +1918,4 @@ def eta_expand_array(
         iterator_alias=expr_alias,
         iterator=expr,
         result=agg_expr,
-    )
+    ), True

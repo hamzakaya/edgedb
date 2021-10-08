@@ -1754,7 +1754,11 @@ def process_set_as_tuple_indirection(
     tuple_set = rptr.source
 
     with ctx.new() as subctx:
-        subctx.expr_exposed = False
+        if not (
+            not tuple_set.is_binding
+            and isinstance(tuple_set.expr, irast.Tuple)
+        ):
+            subctx.expr_exposed = False
         rvar = get_set_rvar(tuple_set, ctx=subctx)
 
         # Check if unpack_rvar has found our answer for us.
