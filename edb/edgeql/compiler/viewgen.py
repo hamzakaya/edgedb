@@ -1584,7 +1584,6 @@ def needs_eta_expansion_expr(
     *,
     ctx: context.ContextLevel,
 ) -> bool:
-    # TODO: also only if there is an object type
     # OK, but let us keep it on until it is less broken.
     # return True
 
@@ -1639,6 +1638,24 @@ def needs_eta_expansion(
     return needs_eta_expansion_expr(ir.expr, stype, ctx=ctx)
 
 
+def _get_alias(
+    name: str, *, ctx: context.ContextLevel
+) -> Tuple[str, qlast.Path]:
+    alias = ctx.aliases.get(name)
+    return alias, qlast.Path(
+        steps=[qlast.ObjectRef(name=alias)],
+    )
+
+
+def _deref(expr: qlast.Expr, field: str) -> qlast.Path:
+    return qlast.Path(
+        steps=[
+            expr,
+            qlast.Ptr(ptr=qlast.ObjectRef(name=field)),
+        ],
+    )
+
+
 def eta_expand_ir(
     ir: irast.Set,
     *,
@@ -1669,10 +1686,7 @@ def eta_expand_ir(
         subctx.anchors = subctx.anchors.copy()
         source_ref = subctx.create_anchor(ir)
 
-        alias = subctx.aliases.get('eta')
-        path = qlast.Path(
-            steps=[qlast.ObjectRef(name=alias)],
-        )
+        alias, path = _get_alias('eta', ctx=ctx)
         qry = qlast.SelectQuery(
             result=eta_expand_sorted(
                 path, setgen.get_set_type(ir, ctx=ctx), ctx=ctx
@@ -1694,37 +1708,21 @@ def eta_expand_sorted(
     ctx: context.ContextLevel,
 ) -> qlast.Expr:
     enumerated = qlast.FunctionCall(
-        func=('__std__', 'enumerate'),
-        args=[expr],
+        func=('__std__', 'enumerate'), args=[expr]
     )
 
-    enumerated_alias = ctx.aliases.get('enum')
-    enumerated_path = qlast.Path(
-        steps=[qlast.ObjectRef(name=enumerated_alias)],
-    )
-    element_path = qlast.Path(
-        steps=[
-            enumerated_path,
-            qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
-        ],
-    )
+    enumerated_alias, enumerated_path = _get_alias('enum', ctx=ctx)
+    element_path = _deref(enumerated_path, '1')
 
     result_expr, has_nested_work = eta_expand(element_path, stype, ctx=ctx)
 
-    index_expr = qlast.Path(
-        steps=[
-            enumerated_path,
-            qlast.Ptr(ptr=qlast.ObjectRef(name='0')),
-        ]
-    )
+    index_expr = _deref(enumerated_path, '0')
 
     # This gets hinky because we need to make everything correlate
     if has_nested_work:
-        result_expr = qlast.Path(
-            steps=[
-                qlast.Tuple(elements=[index_expr, result_expr]),
-                qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
-            ],
+        result_expr = _deref(
+            qlast.Tuple(elements=[index_expr, result_expr]),
+            '1',
         )
 
     return qlast.SelectQuery(
@@ -1764,7 +1762,7 @@ def eta_expand_tuple(
     ctx: context.ContextLevel,
 ) -> Tuple[qlast.Expr, bool]:
     # if not stype.contains_object(ctx.env.schema):
-    #     return False
+    #     return expr, False
 
     subtypes = list(stype.iter_subtypes(ctx.env.schema))
     if not subtypes:
@@ -1774,14 +1772,8 @@ def eta_expand_tuple(
         (
             qlast.ObjectRef(name=name),
             eta_expand(
-                qlast.Path(
-                    steps=[
-                        expr, qlast.Ptr(ptr=qlast.ObjectRef(name=name)),
-                    ],
-                ),
-                subtype,
-                ctx=ctx,
-            ),  # XXX
+                _deref(expr, name), subtype, ctx=ctx
+            ),
         )
         for name, subtype in subtypes
     ]
@@ -1808,81 +1800,29 @@ def eta_expand_array(
     ctx: context.ContextLevel,
 ) -> Tuple[qlast.Expr, bool]:
     # if not stype.contains_object(ctx.env.schema):
-    #     return False
+    #     return expr, False
 
     # We expand arrays roughly into:
-    # WITH Z := $expr
     # SELECT (
-    #     FOR z in {Z} UNION (
-    #         WITH v := enumerate(array_unpack(z)),
-    #             SELECT array_agg((SELECT EXPAND(v.1) ORDER BY v.0))
+    #     FOR array in {$expr} UNION (
+    #         SELECT array_agg(SORTED_EXPAND(array_unpack(array)))
     #     )
     # );
 
-    expr_alias = ctx.aliases.get('array')
-    expr_path = qlast.Path(
-        steps=[qlast.ObjectRef(name=expr_alias)],
-    )
-
+    array_alias, array_path = _get_alias('array', ctx=ctx)
     unpacked = qlast.FunctionCall(
-        func=('__std__', 'array_unpack'),
-        args=[expr_path],
+        func=('__std__', 'array_unpack'), args=[array_path]
     )
 
-    enumerated = qlast.FunctionCall(
-        func=('__std__', 'enumerate'),
-        args=[unpacked],
-    )
-
-    enumerated_alias = ctx.aliases.get('enum')
-    enumerated_path = qlast.Path(
-        steps=[qlast.ObjectRef(name=enumerated_alias)],
-    )
-
-    element_ast = qlast.Path(
-        steps=[
-            enumerated_path,
-            qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
-        ],
-    )
-    expanded_ast, has_nested_work = eta_expand(
-        element_ast, stype.get_element_type(ctx.env.schema), ctx=ctx)
-
-    index_expr = qlast.Path(
-        steps=[
-            enumerated_path,
-            qlast.Ptr(ptr=qlast.ObjectRef(name='0'))
-        ],
-    )
-
-    if has_nested_work:
-        expanded_ast = qlast.Path(
-            steps=[
-                qlast.Tuple(elements=[index_expr, expanded_ast]),
-                qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
-            ],
-        )
+    expanded = eta_expand_sorted(
+        unpacked, stype.get_element_type(ctx.env.schema), ctx=ctx)
 
     agg_expr = qlast.FunctionCall(
-        func=('__std__', 'array_agg'),
-        args=[
-            qlast.SelectQuery(
-                result=expanded_ast,
-                orderby=[
-                    qlast.SortExpr(
-                        path=index_expr,
-                        direction=qlast.SortOrder.Asc,
-                    ),
-                ],
-                aliases=[
-                    qlast.AliasedExpr(alias=enumerated_alias, expr=enumerated)
-                ],
-            ),
-        ],
+        func=('__std__', 'array_agg'), args=[expanded]
     )
 
     return qlast.ForQuery(
-        iterator_alias=expr_alias,
+        iterator_alias=array_alias,
         iterator=expr,
         result=agg_expr,
     ), True
