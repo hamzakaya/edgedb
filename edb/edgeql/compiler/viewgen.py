@@ -1674,9 +1674,9 @@ def eta_expand_ir(
             steps=[qlast.ObjectRef(name=alias)],
         )
         qry = qlast.SelectQuery(
-            result=eta_expand(
+            result=eta_expand_sorted(
                 path, setgen.get_set_type(ir, ctx=ctx), ctx=ctx
-            )[0],
+            ),
             aliases=[
                 qlast.AliasedExpr(alias=alias, expr=source_ref)
             ],
@@ -1685,6 +1685,60 @@ def eta_expand_ir(
             subctx.toplevel_stmt = None
             # subctx.expr_exposed = True  # ?
         return dispatch.compile(qry, ctx=subctx)
+
+
+def eta_expand_sorted(
+    expr: qlast.Expr,
+    stype: s_types.Type,
+    *,
+    ctx: context.ContextLevel,
+) -> qlast.Expr:
+    enumerated = qlast.FunctionCall(
+        func=('__std__', 'enumerate'),
+        args=[expr],
+    )
+
+    enumerated_alias = ctx.aliases.get('enum')
+    enumerated_path = qlast.Path(
+        steps=[qlast.ObjectRef(name=enumerated_alias)],
+    )
+    element_path = qlast.Path(
+        steps=[
+            enumerated_path,
+            qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
+        ],
+    )
+
+    result_expr, has_nested_work = eta_expand(element_path, stype, ctx=ctx)
+
+    index_expr = qlast.Path(
+        steps=[
+            enumerated_path,
+            qlast.Ptr(ptr=qlast.ObjectRef(name='0')),
+        ]
+    )
+
+    # This gets hinky because we need to make everything correlate
+    if has_nested_work:
+        result_expr = qlast.Path(
+            steps=[
+                qlast.Tuple(elements=[index_expr, result_expr]),
+                qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
+            ],
+        )
+
+    return qlast.SelectQuery(
+        result=result_expr,
+        orderby=[
+            qlast.SortExpr(
+                path=index_expr,
+                direction=qlast.SortOrder.Asc,
+            ),
+        ],
+        aliases=[
+            qlast.AliasedExpr(alias=enumerated_alias, expr=enumerated)
+        ],
+    )
 
 
 def eta_expand(
@@ -1716,30 +1770,13 @@ def eta_expand_tuple(
     if not subtypes:
         return expr, False
 
-    enumerated = qlast.FunctionCall(
-        func=('__std__', 'enumerate'),
-        args=[expr],
-    )
-
-    enumerated_alias = ctx.aliases.get('enum')
-    enumerated_path = qlast.Path(
-        steps=[qlast.ObjectRef(name=enumerated_alias)],
-    )
-
-    element_ast = qlast.Path(
-        steps=[
-            enumerated_path,
-            qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
-        ],
-    )
-
     els = [
         (
             qlast.ObjectRef(name=name),
             eta_expand(
                 qlast.Path(
                     steps=[
-                        element_ast, qlast.Ptr(ptr=qlast.ObjectRef(name=name)),
+                        expr, qlast.Ptr(ptr=qlast.ObjectRef(name=name)),
                     ],
                 ),
                 subtype,
@@ -1760,78 +1797,8 @@ def eta_expand_tuple(
             elements=[el for _, (el, _) in els]
         )
 
-    index_expr = qlast.Path(
-        steps=[
-            enumerated_path,
-            qlast.Ptr(ptr=qlast.ObjectRef(name='0')),
-        ]
-    )
-
-    # This gets hinky because we need to make everything correlate
     has_nested_work = any(nested for _, (_, nested) in els)
-    if has_nested_work:
-        tup = qlast.Path(
-            steps=[
-                qlast.Tuple(elements=[index_expr, tup]),
-                qlast.Ptr(ptr=qlast.ObjectRef(name='1')),
-            ],
-        )
-
-    return qlast.SelectQuery(
-        result=tup,
-        orderby=[
-            qlast.SortExpr(
-                path=index_expr,
-                direction=qlast.SortOrder.Asc,
-            ),
-        ],
-        aliases=[
-            qlast.AliasedExpr(alias=enumerated_alias, expr=enumerated)
-        ],
-    ), True
-
-
-def bad_eta_expand_tuple(
-    expr: qlast.Expr,
-    stype: s_types.Tuple,
-    *,
-    ctx: context.ContextLevel,
-) -> Tuple[qlast.Expr, bool]:
-    # if not stype.contains_object(ctx.env.schema):
-    #     return False
-
-    subtypes = list(stype.iter_subtypes(ctx.env.schema))
-    if not subtypes:
-        return expr, False
-
-    els = [
-        (
-            qlast.ObjectRef(name=name),
-            eta_expand(
-                qlast.Path(
-                    steps=[
-                        expr, qlast.Ptr(ptr=qlast.ObjectRef(name=name)),
-                    ],
-                ),
-                subtype,
-                ctx=ctx,
-            )[0],  # XXX
-        )
-        for name, subtype in subtypes
-    ]
-
-    tup: qlast.Expr
-    if stype.is_named(ctx.env.schema):
-        tup = qlast.NamedTuple(
-            elements=[
-                qlast.TupleElement(name=name, val=el) for name, el in els
-            ])
-    else:
-        tup = qlast.Tuple(
-            elements=[el for _, el in els]
-        )
-
-    return tup, True
+    return tup, has_nested_work
 
 
 def eta_expand_array(
